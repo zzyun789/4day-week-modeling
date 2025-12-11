@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>4.5일제 전략 분석 시스템</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const WorkPolicyAnalyzer = () => {
+            const [csvData, setCsvData] = useState(null);
+            const [industries, setIndustries] = useState([]);
+            const [selectedIndustry, setSelectedIndustry] = useState('');
+            const [companySize, setCompanySize] = useState('');
+            const [userWage, setUserWage] = useState('');
+            const [userHours, setUserHours] = useState('');
+            const [userWorkDays, setUserWorkDays] = useState('');
+            const [userOvertimeHours, setUserOvertimeHours] = useState('');
+            
+            const [manualScores, setManualScores] = useState({
+                V1: 3,
+                V4: 3,
+                V5: 3,
+                V6: 3
+            });
+            
+            const [autoScores, setAutoScores] = useState({
+                V2: null,
+                V3: null
+            });
+            
+            const [quadrant, setQuadrant] = useState(null);
+
+            // 산업별 베이스라인 점수 (산업 특성 반영)
+            const industryBaseline = {
+                'J.정보통신업(58~63)': { V1: 2, V2: 4.5, V3: 3.5, V4: 3, V5: 2, V6: 4.5 },
+                'C.제조업(10~34)': { V1: 4.5, V2: 3, V3: 3.5, V4: 4, V5: 4, V6: 3 },
+                'K.금융 및 보험업(64~66)': { V1: 3, V2: 4, V3: 3, V4: 2.5, V5: 3, V6: 4 },
+                'Q.보건업 및 사회복지 서비스업(86~87)': { V1: 5, V2: 3.5, V3: 4, V4: 3.5, V5: 4, V6: 2 },
+                'G.도매 및 소매업(45~47)': { V1: 3.5, V2: 2.5, V3: 3, V4: 3, V5: 3.5, V6: 3.5 },
+                'M.전문, 과학 및 기술 서비스업(70~73)': { V1: 2.5, V2: 4, V3: 3, V4: 3.5, V5: 2.5, V6: 4 },
+                'I.숙박 및 음식점업(55~56)': { V1: 4, V2: 2, V3: 4, V4: 2.5, V5: 3, V6: 2.5 },
+                'H.운수 및 창고업(49~52)': { V1: 4.5, V2: 2.5, V3: 3.5, V4: 3.5, V5: 3.5, V6: 3 },
+                'D.전기, 가스, 증기 및 공기조절 공급업(35)': { V1: 5, V2: 2, V3: 2.5, V4: 3, V5: 4, V6: 3.5 },
+                'B.광업(05~08)': { V1: 5, V2: 2.5, V3: 4, V4: 4, V5: 4, V6: 2 },
+                'E.수도, 하수 및 폐기물 처리, 원료 재생업(36~39)': { V1: 4, V2: 2.5, V3: 3.5, V4: 3.5, V5: 3.5, V6: 3 },
+                'F.건설업(41~42)': { V1: 3.5, V2: 3, V3: 3.5, V4: 4, V5: 3.5, V6: 3 },
+                'L.부동산업(68)': { V1: 2, V2: 2.5, V3: 2.5, V4: 2.5, V5: 2, V6: 3 },
+                'N.사업시설 관리, 사업 지원 및 임대 서비스업(74~76)': { V1: 3.5, V2: 2, V3: 3, V4: 3, V5: 3, V6: 3.5 },
+                'P.교육 서비스업(85)': { V1: 3, V2: 3, V3: 3, V4: 3, V5: 3, V6: 3 },
+                'R.예술, 스포츠 및 여가관련 서비스업(90~91)': { V1: 3, V2: 2.5, V3: 3, V4: 3, V5: 3, V6: 2.5 },
+                'S.협회 및 단체, 수리 및 기타 개인 서비스업(94~96)': { V1: 2.5, V2: 2, V3: 2.5, V4: 3, V5: 2.5, V6: 2.5 }
+            };
+
+            // CSV 파일 업로드 핸들러
+            const handleFileUpload = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const text = e.target.result;
+                    parseCSV(text);
+                };
+                reader.readAsText(file, 'UTF-8');
+            };
+
+            // CSV 파싱 (KOSIS 형식 - 더 많은 컬럼 추출)
+            const parseCSV = (text) => {
+                const lines = text.trim().split('\n');
+                console.log('전체 줄 수:', lines.length);
+                
+                // 헤더는 2줄이므로 3번째 줄부터가 실제 데이터
+                const dataRows = lines.slice(2).filter(line => line.trim());
+                
+                const parsed = dataRows.map((row, index) => {
+                    const values = [];
+                    let current = '';
+                    let inQuotes = false;
+                    
+                    for (let i = 0; i < row.length; i++) {
+                        const char = row[i];
+                        if (char === '"') {
+                            inQuotes = !inQuotes;
+                        } else if (char === ',' && !inQuotes) {
+                            values.push(current.trim());
+                            current = '';
+                        } else {
+                            current += char;
+                        }
+                    }
+                    values.push(current.trim());
+                    
+                    // 산업명, 규모명 정제
+                    const industry = values[0]?.replace(/"/g, '').trim();
+                    const size = values[1]?.replace(/"/g, '').trim();
+                    
+                    // 인덱스 매핑 (헤더 확인 결과)
+                    // 2: 전체근로일수, 3: 상용근로일수
+                    // 5: 상용총근로시간, 6: 상용소정실근로시간, 7: 상용초과근로시간
+                    // 10: 상용임금총액
+                    const totalWorkDays = parseFloat(values[2]?.replace(/,/g, ''));
+                    const regularWorkDays = parseFloat(values[3]?.replace(/,/g, ''));
+                    const totalHours = parseFloat(values[5]?.replace(/,/g, ''));
+                    const regularHours = parseFloat(values[6]?.replace(/,/g, ''));
+                    const overtimeHours = parseFloat(values[7]?.replace(/,/g, ''));
+                    const wage = parseFloat(values[10]?.replace(/,/g, ''));
+                    
+                    // 첫 5개 행 로그
+                    if (index < 5) {
+                        console.log(`행 ${index}: ${industry} / ${size}`);
+                        console.log(`  - 근로일: ${regularWorkDays}일, 총시간: ${totalHours}h, 초과: ${overtimeHours}h, 임금: ${wage}원`);
+                    }
+                    
+                    return { 
+                        industry, 
+                        size, 
+                        workDays: regularWorkDays,
+                        totalHours, 
+                        regularHours,
+                        overtimeHours,
+                        wage 
+                    };
+                }).filter(d => 
+                    d.industry && 
+                    d.size && 
+                    !isNaN(d.wage) && 
+                    !isNaN(d.totalHours) &&
+                    d.wage > 0 && 
+                    d.totalHours > 0 &&
+                    !d.industry.includes('전체')
+                );
+                
+                console.log('파싱 완료! 총', parsed.length, '개');
+                console.log('샘플:', parsed.slice(0, 2));
+                
+                setCsvData(parsed);
+                
+                const uniqueIndustries = [...new Set(parsed.map(d => d.industry))];
+                setIndustries(uniqueIndustries);
+                
+                alert(`✅ CSV 로딩 완료!\n- ${parsed.length}개 데이터\n- ${uniqueIndustries.length}개 산업\n\n콘솔(F12)에서 상세 확인`);
+            };
+
+            // V2, V3 자동 계산 (산업 베이스라인 + 상대 위치)
+            const calculateAutoScores = () => {
+                // 디버깅: 현재 상태 확인
+                console.log('=== 입력값 체크 ===');
+                console.log('csvData:', csvData ? `${csvData.length}개` : '없음');
+                console.log('selectedIndustry:', selectedIndustry || '비어있음');
+                console.log('companySize:', companySize || '비어있음');
+                console.log('userWage:', userWage || '비어있음');
+                console.log('userHours:', userHours || '비어있음');
+                console.log('userWorkDays:', userWorkDays || '비어있음');
+
+                if (!csvData) {
+                    alert('❌ CSV 파일을 먼저 업로드해주세요!');
+                    return;
+                }
+                
+                if (!selectedIndustry) {
+                    alert('❌ 산업을 선택해주세요!');
+                    return;
+                }
+                
+                if (!companySize) {
+                    alert('❌ 기업 규모를 선택해주세요!');
+                    return;
+                }
+                
+                if (!userWage) {
+                    alert('❌ 월평균 임금을 입력해주세요!');
+                    return;
+                }
+                
+                if (!userWorkDays) {
+                    alert('❌ 월 근로일수를 입력해주세요!');
+                    return;
+                }
+                
+                if (!userHours) {
+                    alert('❌ 월 총 근로시간을 입력해주세요!');
+                    return;
+                }
+
+                console.log('=== 검색 시작 ===');
+                console.log('찾는 산업:', selectedIndustry);
+                console.log('찾는 규모:', companySize);
+
+                const industryData = csvData.find(d => 
+                    d.industry === selectedIndustry && d.size === companySize
+                );
+
+                console.log('검색 결과:', industryData);
+                
+                if (!industryData) {
+                    const similarIndustry = csvData.filter(d => d.industry === selectedIndustry);
+                    console.log('해당 산업의 모든 규모:', similarIndustry);
+                    
+                    alert(`❌ 데이터를 찾을 수 없습니다!\n\n해당 산업의 가능한 규모:\n${similarIndustry.map(d => `- "${d.size}"`).join('\n')}`);
+                    return;
+                }
+
+                // 입력값 파싱
+                const userWageWon = parseFloat(userWage) * 10000; // 만원 → 원
+                const userTotalHours = parseFloat(userHours);
+                const userDays = parseFloat(userWorkDays);
+                const userOvertime = parseFloat(userOvertimeHours) || 0;
+
+                // 산업 평균값
+                const industryWage = industryData.wage;
+                const industryTotalHours = industryData.totalHours;
+                const industryDays = industryData.workDays;
+                const industryOvertime = industryData.overtimeHours;
+
+                // 계산된 지표
+                const userDailyHours = userTotalHours / userDays;
+                const industryDailyHours = industryTotalHours / industryDays;
+                
+                const userOvertimeRatio = userOvertime / userTotalHours;
+                const industryOvertimeRatio = industryOvertime / industryTotalHours;
+
+                console.log('=== 상세 비교 ===');
+                console.log('임금:', userWageWon, 'vs', industryWage);
+                console.log('일평균 근로시간:', userDailyHours.toFixed(1), 'vs', industryDailyHours.toFixed(1));
+                console.log('초과근무 비중:', (userOvertimeRatio*100).toFixed(1) + '%', 'vs', (industryOvertimeRatio*100).toFixed(1) + '%');
+
+                // 산업 베이스라인 가져오기
+                const baseScores = industryBaseline[selectedIndustry] || { V1: 3, V2: 3, V3: 3, V4: 3, V5: 3, V6: 3 };
+
+                // V2: 인력 유치 경쟁도 (임금 기반 + 산업 베이스라인)
+                const wageRatio = userWageWon / industryWage;
+                let v2RelativeScore;
+                if (wageRatio >= 1.15) v2RelativeScore = 2;      // 업계 대비 매우 높음 → +2점
+                else if (wageRatio >= 1.08) v2RelativeScore = 1; 
+                else if (wageRatio >= 0.92) v2RelativeScore = 0; 
+                else if (wageRatio >= 0.85) v2RelativeScore = -1;
+                else v2RelativeScore = -2;
+                
+                const v2Score = Math.max(1, Math.min(5, baseScores.V2 + v2RelativeScore));
+
+                // V3: 임금 민감도 (근로 강도 기반 + 산업 베이스라인)
+                const dailyHoursRatio = userDailyHours / industryDailyHours;
+                const overtimeGap = userOvertimeRatio - industryOvertimeRatio;
+                const workIntensityScore = (dailyHoursRatio * 0.7) + ((1 + overtimeGap * 5) * 0.3);
+                
+                let v3RelativeScore;
+                if (workIntensityScore >= 1.10) v3RelativeScore = 2;
+                else if (workIntensityScore >= 1.05) v3RelativeScore = 1;
+                else if (workIntensityScore >= 0.95) v3RelativeScore = 0;
+                else if (workIntensityScore >= 0.90) v3RelativeScore = -1;
+                else v3RelativeScore = -2;
+                
+                const v3Score = Math.max(1, Math.min(5, baseScores.V3 + v3RelativeScore));
+
+                console.log('=== 계산 결과 ===');
+                console.log('임금 비율:', wageRatio.toFixed(2), '→ V2:', v2Score);
+                console.log('근로강도 점수:', workIntensityScore.toFixed(2), '→ V3:', v3Score);
+
+                const resultMessage = `
+✅ 자동 계산 완료!
+
+【 산업 베이스라인 】
+• ${selectedIndustry}의 일반적 특성이 반영되었습니다
+
+【 산업 평균 대비 】
+• 임금: ${(wageRatio * 100 - 100).toFixed(1)}%
+• 일평균 근로시간: ${(dailyHoursRatio * 100 - 100).toFixed(1)}%
+• 초과근무 비중: ${(overtimeGap * 100).toFixed(1)}%p
+
+【 최종 점수 (산업특성 + 상대위치) 】
+• V2 (인력 경쟁): ${baseScores.V2.toFixed(1)} → ${v2Score}점
+• V3 (임금 민감도): ${baseScores.V3.toFixed(1)} → ${v3Score}점
+                `.trim();
+
+                alert(resultMessage);
+
+                // 자동 점수 저장
+                const newAutoScores = { V2: v2Score, V3: v3Score };
+                setAutoScores(newAutoScores);
+                
+                // 전체 점수로 사분면 계산
+                calculateQuadrant({ ...manualScores, ...newAutoScores });
+            };
+
+            // 사분면 계산
+            const calculateQuadrant = (scores) => {
+                // 모든 점수가 있는지 확인
+                const allScores = {...manualScores, ...autoScores};
+                if (!allScores.V2 || !allScores.V3) {
+                    return; // 자동 계산 미완료 시 사분면 미표시
+                }
+                
+                const xWeight = { V1: 0.4, V5: 0.4, V2: -0.3, V6: -0.3 };
+                const yWeight = { V2: 0.35, V3: 0.35, V4: -0.25, V6: 0.25 };
+                const normalize = (score) => (score - 3) / 2;
+
+                const xScore = 
+                    normalize(allScores.V1) * xWeight.V1 +
+                    normalize(allScores.V5) * xWeight.V5 +
+                    normalize(allScores.V2) * xWeight.V2 +
+                    normalize(allScores.V6) * xWeight.V6;
+
+                const yScore = 
+                    normalize(allScores.V2) * yWeight.V2 +
+                    normalize(allScores.V3) * yWeight.V3 +
+                    normalize(allScores.V4) * yWeight.V4 +
+                    normalize(allScores.V6) * yWeight.V6;
+
+                let position, strategy, risks;
+                
+                if (xScore >= 0 && yScore >= 0) {
+                    position = '우상단';
+                    strategy = '직군 차등 + 임금 유지';
+                    risks = ['통상임금 소급 리스크', '직군 간 형평성 논란', '관리 복잡도 증가'];
+                } else if (xScore < 0 && yScore >= 0) {
+                    position = '좌상단';
+                    strategy = '직군 동일 + 임금 유지';
+                    risks = ['생산성 확보 과제', '비용 부담 증가', '경쟁력 약화 우려'];
+                } else if (xScore >= 0 && yScore < 0) {
+                    position = '우하단';
+                    strategy = '직군 차등 + 임금 삭감';
+                    risks = ['근로자 반발', '노사 갈등', '이직률 증가'];
+                } else {
+                    position = '좌하단';
+                    strategy = '직군 동일 + 임금 삭감';
+                    risks = ['전사적 사기 저하', '법적 분쟁 가능성', '인재 유출'];
+                }
+
+                setQuadrant({ position, strategy, risks, xScore, yScore });
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
+                    <div className="max-w-6xl mx-auto">
+                        <div className="bg-white rounded-2xl shadow-2xl p-8">
+                            <h1 className="text-3xl font-bold text-gray-800 mb-8">4.5일제 전략 분석 시스템</h1>
+
+                            {/* CSV 업로드 */}
+                            <div className="mb-8 p-6 bg-yellow-50 rounded-xl border-2 border-yellow-200">
+                                <h2 className="text-xl font-bold mb-4">📂 CSV 파일 업로드</h2>
+                                <input 
+                                    type="file" 
+                                    accept=".csv"
+                                    onChange={handleFileUpload}
+                                    className="w-full p-3 border-2 border-dashed rounded-lg cursor-pointer"
+                                />
+                                {csvData && (
+                                    <p className="mt-2 text-sm text-green-600">✅ {csvData.length}개 데이터 로드 완료</p>
+                                )}
+                            </div>
+
+                            {/* Step 1: 기업 정보 입력 */}
+                            <div className="mb-8 p-6 bg-blue-50 rounded-xl">
+                                <h2 className="text-xl font-bold mb-4">Step 1: 기업 정보 입력</h2>
+                                
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium mb-2">산업 분류</label>
+                                        <select 
+                                            className="w-full p-2 border rounded-lg"
+                                            value={selectedIndustry}
+                                            onChange={(e) => setSelectedIndustry(e.target.value)}
+                                        >
+                                            <option value="">선택하세요</option>
+                                            {industries.map(ind => (
+                                                <option key={ind} value={ind}>{ind}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-medium mb-2">기업 규모</label>
+                                        <select 
+                                            className="w-full p-2 border rounded-lg"
+                                            value={companySize}
+                                            onChange={(e) => setCompanySize(e.target.value)}
+                                        >
+                                            <option value="">선택하세요</option>
+                                            <option value="1~4인">1~4인</option>
+                                            <option value="5~9인">5~9인</option>
+                                            <option value="10~29인">10~29인</option>
+                                            <option value="30~99인">30~99인</option>
+                                            <option value="100~299인">100~299인</option>
+                                            <option value="300인이상">300인 이상</option>
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-medium mb-2">월평균 임금 (만원)</label>
+                                        <input 
+                                            type="number"
+                                            className="w-full p-2 border rounded-lg"
+                                            placeholder="예: 450"
+                                            value={userWage}
+                                            onChange={(e) => setUserWage(e.target.value)}
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-medium mb-2">월 근로일수 (일)</label>
+                                        <input 
+                                            type="number"
+                                            className="w-full p-2 border rounded-lg"
+                                            placeholder="예: 21"
+                                            value={userWorkDays}
+                                            onChange={(e) => setUserWorkDays(e.target.value)}
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-medium mb-2">월 총 근로시간 (시간)</label>
+                                        <input 
+                                            type="number"
+                                            className="w-full p-2 border rounded-lg"
+                                            placeholder="예: 180"
+                                            value={userHours}
+                                            onChange={(e) => setUserHours(e.target.value)}
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-medium mb-2">월 초과근무시간 (시간)</label>
+                                        <input 
+                                            type="number"
+                                            className="w-full p-2 border rounded-lg"
+                                            placeholder="예: 15 (선택)"
+                                            value={userOvertimeHours}
+                                            onChange={(e) => setUserOvertimeHours(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+
+                                <button
+                                    onClick={calculateAutoScores}
+                                    className="mt-4 w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700"
+                                >
+                                    📊 데이터 기반 점수 자동 계산
+                                </button>
+
+                                {autoScores.V2 && (
+                                    <div className="mt-4 p-4 bg-white rounded-lg border-2 border-indigo-200">
+                                        <p className="text-sm font-medium text-indigo-800">✅ 자동 계산 완료!</p>
+                                        <div className="mt-2 space-y-1 text-sm">
+                                            <p><strong>V2 (인력 경쟁):</strong> {autoScores.V2}점</p>
+                                            <p><strong>V3 (임금 민감도):</strong> {autoScores.V3}점</p>
+                                            <p className="text-xs text-gray-600 mt-2">
+                                                * 산업별 특성 + 산업 평균 대비 상대적 위치를 반영하여 계산되었습니다.
+                                            </p>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Step 2: 수동 평가 */}
+                            <div className="mb-8 p-6 bg-green-50 rounded-xl">
+                                <h2 className="text-xl font-bold mb-4">Step 2: 휴리스틱 평가 (1~5점)</h2>
+                                
+                                {[
+                                    { key: 'V1', label: 'V1: 생산/운영 연속성', desc: '24시간 운영 필요성' },
+                                    { key: 'V4', label: 'V4: 포괄임금제 활용도', desc: '포괄임금제 의존 정도' },
+                                    { key: 'V5', label: 'V5: 직군 이질성', desc: '생산직/사무직 차이' },
+                                    { key: 'V6', label: 'V6: 자동화 잠재력', desc: '3년 내 자동화 가능성' }
+                                ].map(item => (
+                                    <div key={item.key} className="mb-4">
+                                        <label className="block text-sm font-medium mb-1">{item.label}</label>
+                                        <p className="text-xs text-gray-600 mb-2">{item.desc}</p>
+                                        <div className="flex gap-2">
+                                            {[1,2,3,4,5].map(score => (
+                                                <button
+                                                    key={score}
+                                                    onClick={() => {
+                                                        const newManualScores = {...manualScores, [item.key]: score};
+                                                        setManualScores(newManualScores);
+                                                        // 자동점수가 있으면 즉시 재계산
+                                                        if (autoScores.V2 && autoScores.V3) {
+                                                            calculateQuadrant({ ...newManualScores, ...autoScores });
+                                                        }
+                                                    }}
+                                                    className={`flex-1 py-2 rounded-lg font-semibold transition-all ${
+                                                        manualScores[item.key] === score
+                                                            ? 'bg-green-600 text-white'
+                                                            : 'bg-white border hover:bg-green-100'
+                                                    }`}
+                                                >
+                                                    {score}점
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* 결과 표시 */}
+                            {quadrant && (
+                                <div className="p-6 bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl">
+                                    <h2 className="text-2xl font-bold mb-4 text-purple-800">📊 분석 결과</h2>
+                                    
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div className="bg-white p-4 rounded-lg">
+                                            <h3 className="font-bold text-lg mb-2">권장 사분면</h3>
+                                            <p className="text-3xl font-bold text-purple-600">{quadrant.position}</p>
+                                            <p className="text-sm text-gray-600 mt-2">{quadrant.strategy}</p>
+                                        </div>
+
+                                        <div className="bg-white p-4 rounded-lg">
+                                            <h3 className="font-bold text-lg mb-2">좌표값</h3>
+                                            <p className="text-sm">X축 (직군): {quadrant.xScore.toFixed(2)}</p>
+                                            <p className="text-sm">Y축 (임금): {quadrant.yScore.toFixed(2)}</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-4 bg-white p-4 rounded-lg">
+                                        <h3 className="font-bold text-lg mb-2">⚠️ 주요 리스크</h3>
+                                        <ul className="list-disc list-inside space-y-1">
+                                            {quadrant.risks.map((risk, idx) => (
+                                                <li key={idx} className="text-sm text-gray-700">{risk}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<WorkPolicyAnalyzer />, document.getElementById('root'));
+    </script>
+</body>
+</html> rounded-lg">
+                                        <h3 className="font-bold text-lg mb-2">📊 평가 점수 요약</h3>
+                                        <div className="grid grid-cols-3 gap-2 text-sm">
+                                            {Object.entries({...manualScores, ...autoScores}).map(([key, val]) => (
+                                                <div key={key} className="bg-gray-50 p-2 rounded">
+                                                    <span className="font-semibold">{key}:</span> {val}점
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-4 bg-white p-4
