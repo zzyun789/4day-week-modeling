@@ -16,6 +16,9 @@
         const { useState, useEffect } = React;
 
         const WorkPolicyAnalyzer = () => {
+            // =======================================================================
+            // 1. 상태(State) 및 데이터 정의
+            // =======================================================================
             const [csvData, setCsvData] = useState(null);
             const [industries, setIndustries] = useState([]);
             const [selectedIndustry, setSelectedIndustry] = useState('');
@@ -60,28 +63,19 @@
                 'S.협회 및 단체, 수리 및 기타 개인 서비스업(94~96)': { V1: 2.5, V2: 2, V3: 2.5, V4: 3, V5: 2.5, V6: 2.5 }
             };
 
-            // CSV 파일 업로드 핸들러
-            const handleFileUpload = (event) => {
-                const file = event.target.files[0];
-                if (!file) return;
+            // =======================================================================
+            // 2. CSV 로딩 및 파싱 로직
+            // =======================================================================
 
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    const text = e.target.result;
-                    parseCSV(text);
-                };
-                reader.readAsText(file, 'UTF-8');
-            };
-
-            // CSV 파싱 (KOSIS 형식 - 더 많은 컬럼 추출)
+            // CSV 텍스트를 데이터 배열로 파싱
             const parseCSV = (text) => {
                 const lines = text.trim().split('\n');
-                console.log('전체 줄 수:', lines.length);
                 
                 // 헤더는 2줄이므로 3번째 줄부터가 실제 데이터
                 const dataRows = lines.slice(2).filter(line => line.trim());
                 
                 const parsed = dataRows.map((row, index) => {
+                    // (생략: CSV 파싱 복잡 로직)
                     const values = [];
                     let current = '';
                     let inQuotes = false;
@@ -99,26 +93,16 @@
                     }
                     values.push(current.trim());
                     
-                    // 산업명, 규모명 정제
+                    // 산업명, 규모명 정제 및 인덱스 매핑 (KOSIS 데이터 기준)
                     const industry = values[0]?.replace(/"/g, '').trim();
                     const size = values[1]?.replace(/"/g, '').trim();
                     
-                    // 인덱스 매핑 (헤더 확인 결과)
-                    // 2: 전체근로일수, 3: 상용근로일수
-                    // 5: 상용총근로시간, 6: 상용소정실근로시간, 7: 상용초과근로시간
-                    // 10: 상용임금총액
                     const totalWorkDays = parseFloat(values[2]?.replace(/,/g, ''));
                     const regularWorkDays = parseFloat(values[3]?.replace(/,/g, ''));
                     const totalHours = parseFloat(values[5]?.replace(/,/g, ''));
                     const regularHours = parseFloat(values[6]?.replace(/,/g, ''));
                     const overtimeHours = parseFloat(values[7]?.replace(/,/g, ''));
                     const wage = parseFloat(values[10]?.replace(/,/g, ''));
-                    
-                    // 첫 5개 행 로그
-                    if (index < 5) {
-                        console.log(`행 ${index}: ${industry} / ${size}`);
-                        console.log(`  - 근로일: ${regularWorkDays}일, 총시간: ${totalHours}h, 초과: ${overtimeHours}h, 임금: ${wage}원`);
-                    }
                     
                     return { 
                         industry, 
@@ -139,115 +123,95 @@
                     !d.industry.includes('전체')
                 );
                 
-                console.log('파싱 완료! 총', parsed.length, '개');
-                console.log('샘플:', parsed.slice(0, 2));
-                
                 setCsvData(parsed);
                 
                 const uniqueIndustries = [...new Set(parsed.map(d => d.industry))];
                 setIndustries(uniqueIndustries);
                 
-                alert(`✅ CSV 로딩 완료!\n- ${parsed.length}개 데이터\n- ${uniqueIndustries.length}개 산업\n\n콘솔(F12)에서 상세 확인`);
+                alert(`✅ CSV 로딩 완료!\n- ${parsed.length}개 데이터\n- ${uniqueIndustries.length}개 산업`);
             };
 
+            // [핵심 수정 부분 A] GitHub에 올린 파일을 자동으로 fetch
+            const fetchCSVData = () => {
+                // 저장소에 올린 CSV 파일 이름: industry.csv
+                const csvFilePath = './industry.csv'; 
+
+                fetch(csvFilePath)
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`❌ CSV 파일 로딩 오류: ${response.status} ${response.statusText}`);
+                        }
+                        return response.text();
+                    })
+                    .then(text => {
+                        parseCSV(text);
+                    })
+                    .catch(error => {
+                        console.error(error.message);
+                        alert(`❌ 데이터 파일 로딩 실패! 파일 이름(industry.csv) 및 업로드 여부를 확인해주세요.\n\n오류: ${error.message}`);
+                    });
+            };
+
+            // [핵심 수정 부분 B] 컴포넌트 로드시 CSV를 자동으로 불러옵니다.
+            useEffect(() => {
+                fetchCSVData();
+            }, []); 
+
+            // =======================================================================
+            // 3. 모델링 및 사분면 계산 로직
+            // =======================================================================
+            
             // V2, V3 자동 계산 (산업 베이스라인 + 상대 위치)
             const calculateAutoScores = () => {
-                // 디버깅: 현재 상태 확인
-                console.log('=== 입력값 체크 ===');
-                console.log('csvData:', csvData ? `${csvData.length}개` : '없음');
-                console.log('selectedIndustry:', selectedIndustry || '비어있음');
-                console.log('companySize:', companySize || '비어있음');
-                console.log('userWage:', userWage || '비어있음');
-                console.log('userHours:', userHours || '비어있음');
-                console.log('userWorkDays:', userWorkDays || '비어있음');
-
+                
                 if (!csvData) {
-                    alert('❌ CSV 파일을 먼저 업로드해주세요!');
+                    alert('❌ CSV 파일 로딩을 기다려주세요!');
                     return;
                 }
                 
-                if (!selectedIndustry) {
-                    alert('❌ 산업을 선택해주세요!');
-                    return;
-                }
-                
-                if (!companySize) {
-                    alert('❌ 기업 규모를 선택해주세요!');
-                    return;
-                }
-                
-                if (!userWage) {
-                    alert('❌ 월평균 임금을 입력해주세요!');
-                    return;
-                }
-                
-                if (!userWorkDays) {
-                    alert('❌ 월 근로일수를 입력해주세요!');
-                    return;
-                }
-                
-                if (!userHours) {
-                    alert('❌ 월 총 근로시간을 입력해주세요!');
+                if (!selectedIndustry || !companySize || !userWage || !userWorkDays || !userHours) {
+                    alert('❌ 모든 기업 정보 항목을 입력해주세요!');
                     return;
                 }
 
-                console.log('=== 검색 시작 ===');
-                console.log('찾는 산업:', selectedIndustry);
-                console.log('찾는 규모:', companySize);
+                // (생략: 데이터 검색 및 점수 계산 로직)
+                const industryData = csvData.find(d => d.industry === selectedIndustry && d.size === companySize);
 
-                const industryData = csvData.find(d => 
-                    d.industry === selectedIndustry && d.size === companySize
-                );
-
-                console.log('검색 결과:', industryData);
-                
                 if (!industryData) {
                     const similarIndustry = csvData.filter(d => d.industry === selectedIndustry);
-                    console.log('해당 산업의 모든 규모:', similarIndustry);
-                    
-                    alert(`❌ 데이터를 찾을 수 없습니다!\n\n해당 산업의 가능한 규모:\n${similarIndustry.map(d => `- "${d.size}"`).join('\n')}`);
+                    alert(`❌ 해당 규모(${companySize})의 데이터를 찾을 수 없습니다!\n\n해당 산업의 가능한 규모:\n${similarIndustry.map(d => `- "${d.size}"`).join('\n')}`);
                     return;
                 }
 
-                // 입력값 파싱
-                const userWageWon = parseFloat(userWage) * 10000; // 만원 → 원
+                const userWageWon = parseFloat(userWage) * 10000;
                 const userTotalHours = parseFloat(userHours);
                 const userDays = parseFloat(userWorkDays);
                 const userOvertime = parseFloat(userOvertimeHours) || 0;
 
-                // 산업 평균값
                 const industryWage = industryData.wage;
                 const industryTotalHours = industryData.totalHours;
                 const industryDays = industryData.workDays;
                 const industryOvertime = industryData.overtimeHours;
-
-                // 계산된 지표
+                
                 const userDailyHours = userTotalHours / userDays;
                 const industryDailyHours = industryTotalHours / industryDays;
                 
                 const userOvertimeRatio = userOvertime / userTotalHours;
                 const industryOvertimeRatio = industryOvertime / industryTotalHours;
 
-                console.log('=== 상세 비교 ===');
-                console.log('임금:', userWageWon, 'vs', industryWage);
-                console.log('일평균 근로시간:', userDailyHours.toFixed(1), 'vs', industryDailyHours.toFixed(1));
-                console.log('초과근무 비중:', (userOvertimeRatio*100).toFixed(1) + '%', 'vs', (industryOvertimeRatio*100).toFixed(1) + '%');
-
-                // 산업 베이스라인 가져오기
                 const baseScores = industryBaseline[selectedIndustry] || { V1: 3, V2: 3, V3: 3, V4: 3, V5: 3, V6: 3 };
 
-                // V2: 인력 유치 경쟁도 (임금 기반 + 산업 베이스라인)
+                // V2: 인력 유치 경쟁도 (임금 기반)
                 const wageRatio = userWageWon / industryWage;
                 let v2RelativeScore;
-                if (wageRatio >= 1.15) v2RelativeScore = 2;      // 업계 대비 매우 높음 → +2점
-                else if (wageRatio >= 1.08) v2RelativeScore = 1; 
-                else if (wageRatio >= 0.92) v2RelativeScore = 0; 
+                if (wageRatio >= 1.15) v2RelativeScore = 2;
+                else if (wageRatio >= 1.08) v2RelativeScore = 1;
+                else if (wageRatio >= 0.92) v2RelativeScore = 0;
                 else if (wageRatio >= 0.85) v2RelativeScore = -1;
                 else v2RelativeScore = -2;
-                
                 const v2Score = Math.max(1, Math.min(5, baseScores.V2 + v2RelativeScore));
 
-                // V3: 임금 민감도 (근로 강도 기반 + 산업 베이스라인)
+                // V3: 임금 민감도 (근로 강도 기반)
                 const dailyHoursRatio = userDailyHours / industryDailyHours;
                 const overtimeGap = userOvertimeRatio - industryOvertimeRatio;
                 const workIntensityScore = (dailyHoursRatio * 0.7) + ((1 + overtimeGap * 5) * 0.3);
@@ -258,18 +222,10 @@
                 else if (workIntensityScore >= 0.95) v3RelativeScore = 0;
                 else if (workIntensityScore >= 0.90) v3RelativeScore = -1;
                 else v3RelativeScore = -2;
-                
                 const v3Score = Math.max(1, Math.min(5, baseScores.V3 + v3RelativeScore));
-
-                console.log('=== 계산 결과 ===');
-                console.log('임금 비율:', wageRatio.toFixed(2), '→ V2:', v2Score);
-                console.log('근로강도 점수:', workIntensityScore.toFixed(2), '→ V3:', v3Score);
 
                 const resultMessage = `
 ✅ 자동 계산 완료!
-
-【 산업 베이스라인 】
-• ${selectedIndustry}의 일반적 특성이 반영되었습니다
 
 【 산업 평균 대비 】
 • 임금: ${(wageRatio * 100 - 100).toFixed(1)}%
@@ -283,20 +239,17 @@
 
                 alert(resultMessage);
 
-                // 자동 점수 저장
                 const newAutoScores = { V2: v2Score, V3: v3Score };
                 setAutoScores(newAutoScores);
-                
-                // 전체 점수로 사분면 계산
                 calculateQuadrant({ ...manualScores, ...newAutoScores });
             };
 
             // 사분면 계산
             const calculateQuadrant = (scores) => {
-                // 모든 점수가 있는지 확인
+                // (생략: 사분면 계산 로직)
                 const allScores = {...manualScores, ...autoScores};
                 if (!allScores.V2 || !allScores.V3) {
-                    return; // 자동 계산 미완료 시 사분면 미표시
+                    return;
                 }
                 
                 const xWeight = { V1: 0.4, V5: 0.4, V2: -0.3, V6: -0.3 };
@@ -338,25 +291,30 @@
                 setQuadrant({ position, strategy, risks, xScore, yScore });
             };
 
+            // =======================================================================
+            // 4. 컴포넌트 렌더링 (UI)
+            // =======================================================================
+
             return (
                 <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
                     <div className="max-w-6xl mx-auto">
                         <div className="bg-white rounded-2xl shadow-2xl p-8">
                             <h1 className="text-3xl font-bold text-gray-800 mb-8">4.5일제 전략 분석 시스템</h1>
 
-                            {/* CSV 업로드 */}
-                            <div className="mb-8 p-6 bg-yellow-50 rounded-xl border-2 border-yellow-200">
-                                <h2 className="text-xl font-bold mb-4">📂 CSV 파일 업로드</h2>
-                                <input 
-                                    type="file" 
-                                    accept=".csv"
-                                    onChange={handleFileUpload}
-                                    className="w-full p-3 border-2 border-dashed rounded-lg cursor-pointer"
-                                />
-                                {csvData && (
-                                    <p className="mt-2 text-sm text-green-600">✅ {csvData.length}개 데이터 로드 완료</p>
+                            {/* CSV 로딩 상태 알림 */}
+                            <div className="mb-8 p-4 bg-yellow-100 rounded-xl border-2 border-yellow-300">
+                                <h2 className="text-xl font-bold mb-2">📊 데이터 로딩 상태</h2>
+                                {csvData ? (
+                                    <p className="text-lg text-green-700 font-semibold">
+                                        ✅ 데이터 로딩 완료: {csvData.length}개 항목
+                                    </p>
+                                ) : (
+                                    <p className="text-lg text-red-700 font-semibold">
+                                        ⏳ 데이터 로딩 중이거나 오류 발생 (F12 콘솔 확인)
+                                    </p>
                                 )}
                             </div>
+
 
                             {/* Step 1: 기업 정보 입력 */}
                             <div className="mb-8 p-6 bg-blue-50 rounded-xl">
@@ -369,6 +327,7 @@
                                             className="w-full p-2 border rounded-lg"
                                             value={selectedIndustry}
                                             onChange={(e) => setSelectedIndustry(e.target.value)}
+                                            disabled={!csvData}
                                         >
                                             <option value="">선택하세요</option>
                                             {industries.map(ind => (
@@ -383,6 +342,7 @@
                                             className="w-full p-2 border rounded-lg"
                                             value={companySize}
                                             onChange={(e) => setCompanySize(e.target.value)}
+                                            disabled={!csvData}
                                         >
                                             <option value="">선택하세요</option>
                                             <option value="1~4인">1~4인</option>
@@ -442,6 +402,7 @@
                                 <button
                                     onClick={calculateAutoScores}
                                     className="mt-4 w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700"
+                                    disabled={!csvData}
                                 >
                                     📊 데이터 기반 점수 자동 계산
                                 </button>
@@ -465,10 +426,10 @@
                                 <h2 className="text-xl font-bold mb-4">Step 2: 휴리스틱 평가 (1~5점)</h2>
                                 
                                 {[
-                                    { key: 'V1', label: 'V1: 생산/운영 연속성', desc: '24시간 운영 필요성' },
-                                    { key: 'V4', label: 'V4: 포괄임금제 활용도', desc: '포괄임금제 의존 정도' },
-                                    { key: 'V5', label: 'V5: 직군 이질성', desc: '생산직/사무직 차이' },
-                                    { key: 'V6', label: 'V6: 자동화 잠재력', desc: '3년 내 자동화 가능성' }
+                                    { key: 'V1', label: 'V1: 생산/운영 연속성', desc: '24시간 운영 필요성 (5점: 높음)' },
+                                    { key: 'V4', label: 'V4: 포괄임금제 활용도', desc: '포괄임금제 의존 정도 (5점: 높음)' },
+                                    { key: 'V5', label: 'V5: 직군 이질성', desc: '생산직/사무직 차이 (5점: 큼)' },
+                                    { key: 'V6', label: 'V6: 자동화 잠재력', desc: '3년 내 자동화 가능성 (5점: 낮음)' }
                                 ].map(item => (
                                     <div key={item.key} className="mb-4">
                                         <label className="block text-sm font-medium mb-1">{item.label}</label>
@@ -480,7 +441,6 @@
                                                     onClick={() => {
                                                         const newManualScores = {...manualScores, [item.key]: score};
                                                         setManualScores(newManualScores);
-                                                        // 자동점수가 있으면 즉시 재계산
                                                         if (autoScores.V2 && autoScores.V3) {
                                                             calculateQuadrant({ ...newManualScores, ...autoScores });
                                                         }
@@ -526,6 +486,18 @@
                                             ))}
                                         </ul>
                                     </div>
+                                    
+                                    <div className="mt-4 bg-white p-4 rounded-lg">
+                                        <h3 className="font-bold text-lg mb-2">📊 평가 점수 요약</h3>
+                                        <div className="grid grid-cols-3 gap-2 text-sm">
+                                            {Object.entries({...manualScores, ...autoScores}).map(([key, val]) => (
+                                                <div key={key} className="bg-gray-50 p-2 rounded">
+                                                    <span className="font-semibold">{key}:</span> {val}점
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
                                 </div>
                             )}
                         </div>
@@ -537,15 +509,4 @@
         ReactDOM.render(<WorkPolicyAnalyzer />, document.getElementById('root'));
     </script>
 </body>
-</html> rounded-lg">
-                                        <h3 className="font-bold text-lg mb-2">📊 평가 점수 요약</h3>
-                                        <div className="grid grid-cols-3 gap-2 text-sm">
-                                            {Object.entries({...manualScores, ...autoScores}).map(([key, val]) => (
-                                                <div key={key} className="bg-gray-50 p-2 rounded">
-                                                    <span className="font-semibold">{key}:</span> {val}점
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    <div className="mt-4 bg-white p-4
+</html>
